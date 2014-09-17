@@ -2,6 +2,9 @@ package com.aeskreis.dungeonraider.chat
 
 import java.io._
 import java.util.UUID
+
+import org.apache.commons.io.EndianUtils
+
 import scala.collection.mutable.{Map => MutableMap}
 import com.rabbitmq.client._
 import Utils._
@@ -15,6 +18,9 @@ object ServerCommands extends Enumeration {
   val Message = Value(1)
   val Disconnect = Value(2)
   val JoinChannel = Value(3)
+  val FriendRequest = Value(4)
+  val FriendResponse = Value(5)
+  val StatusChange = Value(6)
 }
 
 object ClientCommands extends Enumeration {
@@ -22,12 +28,22 @@ object ClientCommands extends Enumeration {
   val FriendConnected = Value(1)
   val FriendDisconnected = Value(2)
   val IncomingMessage = Value(3)
+  val FriendRequested = Value(4)
+  val FriendResponded = Value(5)
+  val FriendStatusChange = Value(6)
 }
 
 object MessageType extends Enumeration {
   val Channel = Value(0)
   val Direct = Value(1)
   val Error = Value(2)
+}
+
+object SocialStatus extends Enumeration {
+  val Offline = Value(0)
+  val Available = Value(1)
+  val Away = Value(2)
+  val Busy = Value(3)
 }
 
 class Server(listenPort: Int) {
@@ -61,13 +77,18 @@ class Server(listenPort: Int) {
         case ServerCommands.Message => onMessageReceived(message)
         case ServerCommands.Disconnect => onDisconnect(message)
         case ServerCommands.JoinChannel => onJoinChannel(message)
+        case ServerCommands.StatusChange => onStatusChange(message)
       }
     }
   }
 
   def onConnect(stream: DataInputStream) {
     val userId = stream.readUUID()
+    val consumerId = stream.readCString()
+
     User.getUserById(userId, { user =>
+      user.consumerId = consumerId
+      user.status = SocialStatus.Available.id
       onlineUsers += (userId -> user)
 
       User.getFriendsForUser(userId, { friends =>
@@ -83,7 +104,7 @@ class Server(listenPort: Int) {
           writer.flush()
 
           onlineFriends.foreach { friend =>
-            producerChannel.basicPublish("", friend.id.toString, false, false, null, message.toByteArray)
+            producerChannel.basicPublish("", friend.consumerId, false, false, null, message.toByteArray)
           }
         }
 
@@ -91,10 +112,15 @@ class Server(listenPort: Int) {
           val message = new ByteArrayOutputStream()
           val writer = new DataOutputStream(message)
 
-          onlineFriends.foreach(friend => writer.writeUUID(friend.id))
+          EndianUtils.writeSwappedInteger(writer, ClientCommands.Connected.id)
+          EndianUtils.writeSwappedInteger(writer, onlineFriends.size)
+          onlineFriends.foreach { friend =>
+            writer.writeUUID(friend.id)
+            EndianUtils.writeSwappedInteger(writer, friend.status)
+          }
           writer.flush()
 
-          producerChannel.basicPublish("", user.id.toString, false, false, null, message.toByteArray)
+          producerChannel.basicPublish("", user.consumerId, false, false, null, message.toByteArray)
         }
       })
     })
@@ -124,21 +150,21 @@ class Server(listenPort: Int) {
           val writer = new DataOutputStream(message)
           writer.writeChar(MessageType.Direct.id)
           writer.writeUUID(sender.id)
-          writer.writeUTF(sender.username)
+          writer.writeCString(sender.username)
           writer.writeUUID(receiver.id)
-          writer.writeUTF(receiver.username)
-          writer.writeUTF(messageText)
+          writer.writeCString(receiver.username)
+          writer.writeCString(messageText)
           writer.flush()
 
-          producerChannel.basicPublish("", sender.id.toString, false, false, null, message.toByteArray)
-          producerChannel.basicPublish("", receiver.id.toString, false, false, null, message.toByteArray)
+          producerChannel.basicPublish("", sender.consumerId.toString, false, false, null, message.toByteArray)
+          producerChannel.basicPublish("", receiver.consumerId.toString, false, false, null, message.toByteArray)
         } else {
           val message = new ByteArrayOutputStream()
           val writer = new DataOutputStream(message)
           writer.writeChar(MessageType.Error.id)
-          writer.writeUTF(Errors.NOT_ONLINE_ERROR(receiverName))
+          writer.writeCString(Errors.NOT_ONLINE_ERROR(receiverName))
 
-          producerChannel.basicPublish("", sender.id.toString, false, false, null, message.toByteArray)
+          producerChannel.basicPublish("", sender.consumerId.toString, false, false, null, message.toByteArray)
         }
       }
     }
@@ -154,11 +180,11 @@ class Server(listenPort: Int) {
       val message = new ByteArrayOutputStream()
       val writer = new DataOutputStream(message)
       writer.write(ClientCommands.FriendDisconnected.id)
-      writer.writeChars(userId.toString)
+      writer.writeUUID(userId)
       writer.flush()
 
       onlineFriends.foreach { friend =>
-        producerChannel.basicPublish("", friend.id.toString, false, false, null, message.toByteArray)
+        producerChannel.basicPublish("", friend.consumerId.toString, false, false, null, message.toByteArray)
       }
 
       message.close()
@@ -175,5 +201,23 @@ class Server(listenPort: Int) {
 
     val channel = channels.getOrElse(channelId, ChatChannel(channelId, channelName))
     channel.addMember(user)
+  }
+
+  def onStatusChange(stream: DataInputStream) = {
+    val userId = stream.readUUID()
+    val user = onlineUsers(userId)
+
+    val status = SocialStatus(stream.readInt())
+
+    val message = new ByteArrayOutputStream()
+    val writer = new DataOutputStream(message)
+    writer.write(ClientCommands.FriendStatusChange.id)
+    writer.writeUUID(userId)
+    writer.flush()
+
+    val onlineFriends = user.friends.filter(user => onlineUsers.contains(user.id))
+    onlineFriends.foreach { friend =>
+      producerChannel.basicPublish("", friend.consumerId.toString, false, false, null, message.toByteArray)
+    }
   }
 }

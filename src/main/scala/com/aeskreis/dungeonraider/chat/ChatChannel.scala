@@ -21,8 +21,8 @@ case class ChatChannel(id: UUID,
     writer.writeChar(MessageType.Channel.id)
     writer.writeUUID(id)
     writer.writeUUID(sender.id)
-    writer.writeUTF(sender.username)
-    writer.writeUTF(text)
+    writer.writeCString(sender.username)
+    writer.writeCString(text)
     writer.flush()
 
     members foreach { member =>

@@ -2,7 +2,7 @@ name := "dungeon-raider-chat"
 
 version := "1.0"
 
-scalaVersion := "2.11.1"
+scalaVersion := "2.10.4"
 
 resolvers += "Typesafe Repo" at "http://repo.typesafe.com/typesafe/releases/"
 
@@ -13,5 +13,6 @@ libraryDependencies ++= Seq(
   "org.mongodb" % "casbah_2.10" % "2.7.3",
   "com.jolbox" % "bonecp" % "0.8.0.RELEASE",
   "com.typesafe" % "config" % "1.2.1",
-  "org.postgresql" % "postgresql" % "9.3-1102-jdbc41"
+  "org.postgresql" % "postgresql" % "9.3-1102-jdbc41",
+  "commons-io" % "commons-io" % "2.4"
 )

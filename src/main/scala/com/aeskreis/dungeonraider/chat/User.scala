@@ -11,14 +11,16 @@ import scala.collection.mutable
 case class User(id: UUID,
                  username: String) {
   var friends = List[User]()
+  var consumerId: String = ""
+  var status: Int = SocialStatus.Offline.id
 }
 
 object User {
 
   implicit val userReads = new Reads[User] {
     override def reads(json: JsValue): JsResult[User] = {
-      val id = UUID.fromString((json \ "id").toString())
-      val username = (json \ "username").toString()
+      val id = UUID.fromString((json \ "id").as[String])
+      val username = (json \ "username").as[String]
       JsSuccess(User(id, username))
     }
   }
@@ -38,11 +40,11 @@ object User {
 
   def getFriendsForUser(id: UUID, success: List[User] => Unit) {
     val hostname = Utils.config.getString("api.hostname")
-    val request = url("http://" + hostname + "/user/" + id.toString)
+    val request = url("http://" + hostname + "/friends/" + id.toString)
     val user = Http(request OK as.String)
     for (u <- user) {
       val response = Json.parse(u)
-      val friends = (response \ "friends").asOpt[List[JsObject]].getOrElse(null)
+      val friends = (response \ "users").asOpt[List[JsObject]].getOrElse(null)
       if (friends != null) {
         success(friends.map(Json.fromJson(_).get))
       }
