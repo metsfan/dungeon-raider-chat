@@ -94,12 +94,12 @@ class Server(listenPort: Int) {
       User.getFriendsForUser(userId, { friends =>
         user.friends = friends
 
-        val onlineFriends = user.friends.filter(user => onlineUsers.contains(user.id))
+        val onlineFriends = user.friends.map(user => onlineUsers.getOrElse(user.id, null)).filter(_ != null)
 
         {
           val message = new ByteArrayOutputStream()
           val writer = new DataOutputStream(message)
-          writer.write(ClientCommands.FriendConnected.id)
+          EndianUtils.writeSwappedInteger(writer, ClientCommands.FriendConnected.id)
           writer.writeUUID(userId)
           writer.flush()
 
@@ -174,7 +174,7 @@ class Server(listenPort: Int) {
   def onDisconnect(stream: DataInputStream) {
     val userId = stream.readUUID()
     val user = onlineUsers(userId)
-    val onlineFriends = user.friends.filter(user => onlineUsers.contains(user.id))
+    val onlineFriends = user.friends.map(user => onlineUsers(user.id)).filter(_ != null)
 
     {
       val message = new ByteArrayOutputStream()

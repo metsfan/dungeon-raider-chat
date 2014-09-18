@@ -46,7 +46,7 @@ object Utils {
 
     def writeCString(string: String) {
       stream.write(string.getBytes("UTF-8"))
-      stream.writeChar('\u0000')
+      stream.writeByte(0)
     }
   }
 
