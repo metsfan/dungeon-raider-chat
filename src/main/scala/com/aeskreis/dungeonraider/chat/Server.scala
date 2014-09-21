@@ -4,10 +4,11 @@ import java.io._
 import java.util.UUID
 
 import org.apache.commons.io.EndianUtils
+import play.api.libs.json.{JsObject, Json}
 
 import scala.collection.mutable.{Map => MutableMap}
 import com.rabbitmq.client._
-import Utils._
+import StreamAddins._
 
 /**
  * Created by Adam on 9/4/14.
@@ -29,7 +30,7 @@ object ClientCommands extends Enumeration {
   val FriendDisconnected = Value(2)
   val IncomingMessage = Value(3)
   val FriendRequested = Value(4)
-  val FriendResponded = Value(5)
+  val FriendAccepted = Value(5)
   val FriendStatusChange = Value(6)
 }
 
@@ -70,7 +71,7 @@ class Server(listenPort: Int) {
       val delivery = consumer.nextDelivery()
       val message = new DataInputStream(new ByteArrayInputStream(delivery.getBody))
 
-      val command = ServerCommands(message.readInt())
+      val command = ServerCommands(EndianUtils.readSwappedInteger(message))
 
       command match {
         case ServerCommands.Connect => onConnect(message)
@@ -78,6 +79,8 @@ class Server(listenPort: Int) {
         case ServerCommands.Disconnect => onDisconnect(message)
         case ServerCommands.JoinChannel => onJoinChannel(message)
         case ServerCommands.StatusChange => onStatusChange(message)
+        case ServerCommands.FriendRequest => onFriendRequest(message)
+        case ServerCommands.FriendResponse => onFriendResponse(message)
       }
     }
   }
@@ -130,7 +133,7 @@ class Server(listenPort: Int) {
     val senderId = stream.readUUID()
     val sender = onlineUsers(senderId)
     val channelId = stream.readUUID()
-    val messageText = stream.readUTF()
+    val messageText = stream.readCString()
 
     val messageType = MessageType(stream.readChar())
     messageType match {
@@ -147,22 +150,19 @@ class Server(listenPort: Int) {
         if (pair != null) {
           val receiver = pair.get._2
           val message = new ByteArrayOutputStream()
-          val writer = new DataOutputStream(message)
-          writer.writeChar(MessageType.Direct.id)
-          writer.writeUUID(sender.id)
-          writer.writeCString(sender.username)
-          writer.writeUUID(receiver.id)
-          writer.writeCString(receiver.username)
-          writer.writeCString(messageText)
-          writer.flush()
+          EndianUtils.writeSwappedInteger(message, MessageType.Direct.id)
+          message.writeUUID(sender.id)
+          message.writeCString(sender.username)
+          message.writeUUID(receiver.id)
+          message.writeCString(receiver.username)
+          message.writeCString(messageText)
 
           producerChannel.basicPublish("", sender.consumerId.toString, false, false, null, message.toByteArray)
           producerChannel.basicPublish("", receiver.consumerId.toString, false, false, null, message.toByteArray)
         } else {
           val message = new ByteArrayOutputStream()
-          val writer = new DataOutputStream(message)
-          writer.writeChar(MessageType.Error.id)
-          writer.writeCString(Errors.NOT_ONLINE_ERROR(receiverName))
+          EndianUtils.writeSwappedInteger(message, MessageType.Error.id)
+          message.writeCString(Errors.NOT_ONLINE_ERROR(receiverName))
 
           producerChannel.basicPublish("", sender.consumerId.toString, false, false, null, message.toByteArray)
         }
@@ -218,6 +218,54 @@ class Server(listenPort: Int) {
     val onlineFriends = user.friends.filter(user => onlineUsers.contains(user.id))
     onlineFriends.foreach { friend =>
       producerChannel.basicPublish("", friend.consumerId.toString, false, false, null, message.toByteArray)
+    }
+  }
+
+  def onFriendRequest(stream: DataInputStream): Unit = {
+    val requesterId = stream.readUUID
+    val requestedId = stream.readUUID
+    val requesterData = stream.readCString
+
+    val requestedUser = onlineUsers.get(requestedId)
+    if (requestedUser.isDefined) {
+      val message = new ByteArrayOutputStream
+      EndianUtils.writeSwappedInteger(message, ClientCommands.FriendRequested.id)
+
+      val jsObj = Json.parse(requesterData).as[JsObject]
+      val userObj = (jsObj \ "user").as[JsObject]
+      message.writeCString(userObj.toString())
+
+      val requesterUser = onlineUsers.get(requesterId)
+      if (requesterUser.isDefined) {
+        EndianUtils.writeSwappedInteger(message, requestedUser.get.status)
+      } else {
+        EndianUtils.writeSwappedInteger(message, SocialStatus.Offline.id)
+      }
+
+
+      producerChannel.basicPublish("", requestedUser.get.consumerId, null, message.toByteArray)
+    }
+  }
+
+  def onFriendResponse(stream: DataInputStream): Unit = {
+    val requesterId = stream.readUUID
+    val requestedId = stream.readUUID
+    val requestedData = stream.readCString
+
+    val requesterUser = onlineUsers.get(requesterId)
+    if (requesterUser.isDefined) {
+      val message = new ByteArrayOutputStream
+      EndianUtils.writeSwappedInteger(message, ClientCommands.FriendAccepted.id)
+      message.writeCString(requestedData)
+
+      val requestedUser = onlineUsers.get(requestedId)
+      if (requesterUser.isDefined) {
+        EndianUtils.writeSwappedInteger(message, requestedUser.get.status)
+      } else {
+        EndianUtils.writeSwappedInteger(message, SocialStatus.Offline.id)
+      }
+
+      producerChannel.basicPublish("", requesterUser.get.consumerId, null, message.toByteArray)
     }
   }
 }

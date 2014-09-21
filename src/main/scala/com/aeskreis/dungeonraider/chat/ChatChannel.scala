@@ -1,10 +1,12 @@
 package com.aeskreis.dungeonraider.chat
 
 import java.util.UUID
+import org.apache.commons.io.EndianUtils
+
 import scala.collection.mutable
 import com.rabbitmq.client._
 import java.io.{DataOutputStream, ByteArrayOutputStream}
-import Utils._
+import StreamAddins._
 import java.io.IOException
 import scala.throws
 
@@ -17,13 +19,11 @@ case class ChatChannel(id: UUID,
 
   def sendMessage(sender: User, text: String, channel: Channel) {
     val message = new ByteArrayOutputStream()
-    val writer = new DataOutputStream(message)
-    writer.writeChar(MessageType.Channel.id)
-    writer.writeUUID(id)
-    writer.writeUUID(sender.id)
-    writer.writeCString(sender.username)
-    writer.writeCString(text)
-    writer.flush()
+    EndianUtils.writeSwappedInteger(message, MessageType.Channel.id)
+    message.writeUUID(id)
+    message.writeUUID(sender.id)
+    message.writeCString(sender.username)
+    message.writeCString(text)
 
     members foreach { member =>
       channel.basicPublish("", member.id.toString, false, false, null, message.toByteArray)
